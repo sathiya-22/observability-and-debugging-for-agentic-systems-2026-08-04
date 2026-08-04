@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Log Viewer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        h1 { color: #0056b3; }
+        #controls { margin-bottom: 20px; padding: 15px; background-color: #e9ecef; border-radius: 8px; display: flex; gap: 10px; align-items: center;}
+        #log-container {
+            background-color: #fff;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 15px;
+            max-height: 70vh;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: monospace;
+            font-size: 0.9em;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .log-entry { margin-bottom: 10px; padding: 8px; border-bottom: 1px dotted #eee; }
+        .log-entry:last-child { border-bottom: none; }
+        .log-entry.AGENT_INITIALIZED { background-color: #e6f7ff; border-left: 5px solid #007bff; }
+        .log-entry.STEP_STARTED { background-color: #e8fadf; border-left: 5px solid #28a745; }
+        .log-entry.STEP_COMPLETED { background-color: #d4edda; border-left: 5px solid #218838; }
+        .log-entry.STEP_FAILED { background-color: #f8d7da; border-left: 5px solid #dc3545; }
+        .log-entry.STATE_UPDATED { background-color: #fff3cd; border-left: 5px solid #ffc107; }
+        .log-entry.TOOL_CALLED { background-color: #e0f2f7; border-left: 5px solid #17a2b8; }
+        .log-entry.TOOL_RESPONSE { background-color: #d1ecf1; border-left: 5px solid #138496; }
+        .log-entry.AGENT_EXITED { background-color: #f0f0f0; border-left: 5px solid #6c757d; }
+        .timestamp { color: #888; font-size: 0.8em; margin-right: 10px; }
+        .agent-id { font-weight: bold; color: #007bff; }
+        .event-type { font-weight: bold; margin-right: 5px; }
+        select, input[type="text"] { padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 8px 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background-color: #0056b3; }
+    </style>
+</head>
+<body>
+    <h1>Agent Log Viewer</h1>
+
+    <div id="controls">
+        <label for="agentFilter">Filter by Agent ID:</label>
+        <select id="agentFilter">
+            <option value="">All Agents</option>
+        </select>
+        <label for="eventTypeFilter">Filter by Event Type:</label>
+        <select id="eventTypeFilter">
+            <option value="">All Event Types</option>
+            <option value="AGENT_INITIALIZED">AGENT_INITIALIZED</option>
+            <option value="STEP_STARTED">STEP_STARTED</option>
+            <option value="STEP_COMPLETED">STEP_COMPLETED</option>
+            <option value="STEP_FAILED">STEP_FAILED</option>
+            <option value="STATE_UPDATED">STATE_UPDATED</option>
+            <option value="TOOL_CALLED">TOOL_CALLED</option>
+            <option value="TOOL_RESPONSE">TOOL_RESPONSE</option>
+            <option value="AGENT_EXITED">AGENT_EXITED</option>
+        </select>
+        <button onclick="applyFilters()">Apply Filters</button>
+        <button onclick="clearLogs()">Clear Display</button>
+    </div>
+
+    <div id="log-container">
+        <p>Waiting for agent events...</p>
+    </div>
+
+    <script>
+        const socket = io();
+        const logContainer = document.getElementById('log-container');
+        const agentFilter = document.getElementById('agentFilter');
+        const eventTypeFilter = document.getElementById('eventTypeFilter');
+        let allLogs = []; // Store all received logs for filtering
+
+        socket.on('connect', function() {
+            console.log('Connected to server');
+        });
+
+        socket.on('new_log_event', function(event) {
+            console.log('Received log event:', event);
+            allLogs.push(event);
+            updateAgentFilterOptions();
+            applyFilters(); // Re-apply filters to show new log if it matches
+            logContainer.scrollTop = logContainer.scrollHeight; // Auto-scroll to bottom
+        });
+
+        socket.on('status', function(data) {
+            console.log(data.msg);
+        });
+
+        function updateAgentFilterOptions() {
+            const currentSelectedAgent = agentFilter.value;
+            const agentIds = new Set(allLogs.map(log => log.agent_id));
+            agentFilter.innerHTML = '<option value="">All Agents</option>';
+            agentIds.forEach(id => {
+                const option = document.createElement('option');
+                option.value = id;
+                option.textContent = id;
+                agentFilter.appendChild(option);
+            });
+            agentFilter.value = currentSelectedAgent; // Restore selection if possible
+        }
+
+        function applyFilters() {
+            logContainer.innerHTML = ''; // Clear current display
+            const selectedAgent = agentFilter.value;
+            const selectedEventType = eventTypeFilter.value;
+
+            const filteredLogs = allLogs.filter(log => {
+                const matchesAgent = !selectedAgent || log.agent_id === selectedAgent;
+                const matchesEventType = !selectedEventType || log.event_type === selectedEventType;
+                return matchesAgent && matchesEventType;
+            });
+
+            if (filteredLogs.length === 0) {
+                logContainer.innerHTML = '<p>No logs match the current filters.</p>';
+                return;
+            }
+
+            filteredLogs.forEach(event => {
+                const entryDiv = document.createElement('div');
+                entryDiv.classList.add('log-entry', event.event_type); // Add event type class for styling
+
+                const timestamp = new Date(event.timestamp).toLocaleTimeString();
+                const agentId = event.agent_id;
+                const step = event.step;
+                const eventType = event.event_type;
+                const payload = JSON.stringify(event.payload, null, 2);
+
+                entryDiv.innerHTML = `
+                    <span class="timestamp">[${timestamp}]</span>
+                    <span class="agent-id">Agent ${agentId}</span>
+                    <span class="event-type">${eventType}</span>
+                    <span class="step">(Step: ${step})</span>
+                    <pre>${payload}</pre>
+                `;
+                logContainer.appendChild(entryDiv);
+            });
+            logContainer.scrollTop = logContainer.scrollHeight; // Auto-scroll to bottom
+        }
+
+        function clearLogs() {
+            allLogs = [];
+            logContainer.innerHTML = '<p>Logs cleared. Waiting for new events...</p>';
+            updateAgentFilterOptions();
+            agentFilter.value = '';
+            eventTypeFilter.value = '';
+        }
+
+        // Initial render when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            applyFilters();
+        });
+    </script>
+</body>
+</html>
